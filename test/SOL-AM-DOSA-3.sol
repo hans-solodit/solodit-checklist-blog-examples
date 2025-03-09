@@ -6,30 +6,113 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /**
- * Overview: This test demonstrates a Denial-of-Service (DOS) vulnerability (SOL-AM-DOSA-3) in a staking contract
- * where a user can be permanently locked out of withdrawing their staked tokens if they are blacklisted by the staked token.
- * The test verifies that if a user is blacklisted by the token contract *after* staking, their withdrawal will fail,
- * effectively locking their funds.
+ * Overview:
+ * Checklist Item ID: SOL-AM-DOSA-3
+
+ * This test demonstrates a Denial-of-Service (DOS) vulnerability (SOL-AM-DOSA-3) in a group staking contract
+ * where an entire group of users can be permanently locked out of withdrawing their staked tokens if just a single member
+ * of the group is blacklisted by the staked token. The test verifies that if any user in a staking group is blacklisted
+ * by the token contract *after* staking, group withdrawals will fail for all members, effectively locking everyone's funds.
  */
 
-contract Staking {
+contract GroupStaking {
     IERC20 public token;
-    mapping(address => uint256) public stakingBalance;
+
+    struct StakingGroup {
+        uint256 id;
+        uint256 totalAmount;
+        address[] members;
+        uint256[] weights;
+        bool exists;
+    }
+
+    // Mapping from group ID to group data
+    mapping(uint256 => StakingGroup) public stakingGroups;
+    // Current group ID counter
+    uint256 public nextGroupId = 1;
 
     constructor(IERC20 _token) {
         token = _token;
     }
 
-    function stake(uint256 _amount) external {
-        require(token.transferFrom(msg.sender, address(this), _amount), "Transfer failed");
-        stakingBalance[msg.sender] += _amount;
+    // Create a new staking group
+    function createStakingGroup(address[] calldata _members, uint256[] calldata _weights) external returns (uint256) {
+        require(_members.length > 0, "Empty members list");
+        require(_members.length == _weights.length, "Members and weights length mismatch");
+
+        // Validate weights sum to 100%
+        uint256 totalWeight = 0;
+        for (uint256 i = 0; i < _weights.length; i++) {
+            totalWeight += _weights[i];
+        }
+        require(totalWeight == 100, "Weights must sum to 100");
+
+        uint256 groupId = nextGroupId;
+        stakingGroups[groupId] = StakingGroup({
+            id: groupId,
+            totalAmount: 0,
+            members: _members,
+            weights: _weights,
+            exists: true
+        });
+
+        nextGroupId++;
+        return groupId;
     }
 
-    function withdraw(uint256 _amount) external {
-        require(stakingBalance[msg.sender] >= _amount, "Insufficient balance");
-        stakingBalance[msg.sender] -= _amount;
-        // Vulnerable line: If `msg.sender` is blacklisted, this transfer will revert, blocking the withdraw
-        token.transfer(msg.sender, _amount);
+    // Stake tokens to a group
+    function stakeToGroup(uint256 _groupId, uint256 _amount) external {
+        require(stakingGroups[_groupId].exists, "Group does not exist");
+        require(token.transferFrom(msg.sender, address(this), _amount), "Transfer failed");
+
+        stakingGroups[_groupId].totalAmount += _amount;
+    }
+
+    // Withdraw tokens from a group with rewards distributed according to weights
+    function withdrawFromGroup(uint256 _groupId, uint256 _amount) external {
+        StakingGroup storage group = stakingGroups[_groupId];
+        require(group.exists, "Group does not exist");
+        require(group.totalAmount >= _amount, "Insufficient group balance");
+
+        // Only a group member can initiate a withdrawal
+        bool isMember = false;
+        for (uint256 i = 0; i < group.members.length; i++) {
+            if (group.members[i] == msg.sender) {
+                isMember = true;
+                break;
+            }
+        }
+        require(isMember, "Not a group member");
+
+        // Update the group's total amount
+        group.totalAmount -= _amount;
+
+        // Distribute the withdrawn amount to all members according to their weights
+        // VULNERABLE: If any member is blacklisted, the entire distribution fails
+        for (uint256 i = 0; i < group.members.length; i++) {
+            uint256 memberShare = (_amount * group.weights[i]) / 100;
+            if (memberShare > 0) {
+                token.transfer(group.members[i], memberShare);
+            }
+        }
+    }
+
+    // Get group info
+    function getGroupInfo(uint256 _groupId) external view returns (
+        uint256 id,
+        uint256 totalAmount,
+        address[] memory members,
+        uint256[] memory weights
+    ) {
+        StakingGroup storage group = stakingGroups[_groupId];
+        require(group.exists, "Group does not exist");
+
+        return (
+            group.id,
+            group.totalAmount,
+            group.members,
+            group.weights
+        );
     }
 }
 
@@ -59,37 +142,84 @@ contract BlacklistableToken is ERC20 {
     }
 }
 
-contract StakingTest is Test {
-    Staking public stakingContract;
+contract GroupStakingTest is Test {
+    GroupStaking public stakingContract;
     BlacklistableToken public token;
-    address public user = address(1);
+
+    address public admin = address(this);
+    address public user1 = address(1);
+    address public user2 = address(2);
+    address public user3 = address(3);
+
+    uint256 public groupId;
 
     function setUp() public {
         // Deploy the BlacklistableToken
         token = new BlacklistableToken("Test Token", "TT");
 
-        // Deploy the Staking contract, passing the token's address
-        stakingContract = new Staking(IERC20(address(token)));
+        // Deploy the GroupStaking contract
+        stakingContract = new GroupStaking(IERC20(address(token)));
 
-        // Mint tokens to the user
-        token.mint(user, 100 ether);
+        // Mint tokens to admin for staking
+        token.mint(admin, 100 ether);
         token.approve(address(stakingContract), 100 ether);
+
+        // Create a staking group with 3 members
+        address[] memory members = new address[](3);
+        members[0] = user1;
+        members[1] = user2;
+        members[2] = user3;
+
+        uint256[] memory weights = new uint256[](3);
+        weights[0] = 50; // 50%
+        weights[1] = 30; // 30%
+        weights[2] = 20; // 20%
+
+        groupId = stakingContract.createStakingGroup(members, weights);
+
+        // Stake to the group
+        stakingContract.stakeToGroup(groupId, 100 ether);
     }
 
-    function testBlacklistingDOS() public {
-        // Arrange: User stakes tokens
-        uint256 stakeAmount = 50 ether;
-        vm.startPrank(user);
-        token.approve(address(stakingContract), stakeAmount);
-        stakingContract.stake(stakeAmount);
-        vm.stopPrank();
+    function testGroupStakingDOS() public {
+        // Verify initial group state
+        (uint256 id, uint256 totalAmount, address[] memory members, uint256[] memory weights) =
+            stakingContract.getGroupInfo(groupId);
 
-        // Act: Blacklist the user
-        token.blacklist(user);
+        assertEq(id, groupId);
+        assertEq(totalAmount, 100 ether);
+        assertEq(members.length, 3);
+        assertEq(weights[0], 50);
+        assertEq(weights[1], 30);
+        assertEq(weights[2], 20);
 
-        // Assert: User cannot withdraw, resulting in DOS
-        vm.prank(user);
+        // Act: Blacklist just one user in the group (user2)
+        token.blacklist(user2);
+
+        // Try to withdraw as user1 (non-blacklisted)
+        vm.prank(user1);
+
+        // Assert: Entire group withdrawal fails because user2 is blacklisted
         vm.expectRevert("Account is blacklisted");
-        stakingContract.withdraw(stakeAmount);
+        stakingContract.withdrawFromGroup(groupId, 10 ether);
+
+        // Verify group balance remains unchanged
+        (,uint256 remainingAmount,,) = stakingContract.getGroupInfo(groupId);
+        assertEq(remainingAmount, 100 ether);
+    }
+
+    function testGroupStakingWithAllMembersNonBlacklisted() public {
+        // Verify that withdrawal works when no users are blacklisted
+        vm.prank(user1);
+        stakingContract.withdrawFromGroup(groupId, 10 ether);
+
+        // Verify group balance is updated correctly
+        (,uint256 remainingAmount,,) = stakingContract.getGroupInfo(groupId);
+        assertEq(remainingAmount, 90 ether);
+
+        // Verify token balances of each user
+        assertEq(token.balanceOf(user1), 5 ether);   // 50% of 10 ether
+        assertEq(token.balanceOf(user2), 3 ether);   // 30% of 10 ether
+        assertEq(token.balanceOf(user3), 2 ether);   // 20% of 10 ether
     }
 }

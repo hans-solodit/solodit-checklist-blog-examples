@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 // Overview:
 // Checklist Item ID: SOL-AM-DOSA-1
+
 // This test demonstrates a denial-of-service (DoS) vulnerability in a contract's ETH withdrawal function.
 // The vulnerability occurs when the contract directly transfers fees to the owner before allowing the user to withdraw.
 // If the owner's address is set to a contract that reverts on ETH receive, user withdrawals will fail.

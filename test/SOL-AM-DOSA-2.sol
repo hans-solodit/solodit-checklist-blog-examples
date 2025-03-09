@@ -2,7 +2,9 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
 
-// Overview: SOL-AM-DOSA-2 - Denial Of Service(DOS) Attack
+// Overview:
+// Checklist Item ID: SOL-AM-DOSA-2
+
 // This test demonstrates a denial-of-service (DoS) vulnerability where an attacker can clog the contract with numerous zero-value transactions,
 // making subsequent legitimate operations expensive or impossible by targeting the lack of a minimum transaction amount enforced. The test
 // exploits the `VulnerableContract` by submitting a large number of zero-value withdrawal requests, then attempts a legitimate withdrawal
