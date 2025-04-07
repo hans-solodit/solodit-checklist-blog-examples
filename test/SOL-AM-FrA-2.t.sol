@@ -9,26 +9,34 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  * Overview:
  * Checklist Item ID: SOL-AM-FrA-2
  *
- * This test demonstrates a front-running attack on a two-step withdrawal process.
- * The attack occurs between the approval transaction and the actual withdrawal transaction,
- * where an attacker can monitor the mempool for approvals and then call withdraw before the intended user.
+ * This test demonstrates a front-running attack on an NFT refinance process.
+ * The attack occurs when an attacker monitors the mempool for NFT approvals
+ * and front-runs the original owner by calling refinance first, becoming
+ * the creditor for the NFT.
  */
 
 interface INFT is IERC721 {
     function mint(address to, uint256 tokenId) external;
 }
 
-contract VulnerableWithdrawal is Ownable {
+contract NFTRefinanceMarket is Ownable {
     INFT public nft;
+    mapping(uint256 => address) public tokenCreditors;
 
     constructor(INFT _nft) Ownable(msg.sender) {
         nft = _nft;
     }
 
-    function withdraw(uint256 _tokenId) external {
-        // Anyone can withdraw if they have approval.  A frontrunner can steal the tokens
+    function refinance(uint256 _tokenId) external {
+        // Check if this contract has approval to transfer the NFT
         require(nft.getApproved(_tokenId) == address(this), "Not approved");
-        nft.transferFrom(nft.ownerOf(_tokenId), msg.sender, _tokenId);
+        address originalOwner = nft.ownerOf(_tokenId);
+
+        // Pull the NFT into this contract as collateral
+        nft.transferFrom(originalOwner, address(this), _tokenId);
+
+        // Record the caller as the creditor for this NFT
+        tokenCreditors[_tokenId] = msg.sender;
     }
 }
 
@@ -41,12 +49,12 @@ contract NFT is ERC721, Ownable, INFT {
 }
 
 contract FrontRunningTest is Test {
-    VulnerableWithdrawal public vulnerableWithdrawal;
-    NFT public nft;
-    address public owner;
-    address public user;
-    address public attacker;
-    uint256 public tokenId = 1;
+    NFTRefinanceMarket nftRefinanceMarket;
+    NFT nft;
+    address owner;
+    address user;
+    address attacker;
+    uint256 tokenId = 1;
 
     function setUp() public {
         owner = vm.addr(1);
@@ -55,35 +63,37 @@ contract FrontRunningTest is Test {
 
         vm.startPrank(owner);
         nft = new NFT();
-        vulnerableWithdrawal = new VulnerableWithdrawal(INFT(address(nft)));
+        nftRefinanceMarket = new NFTRefinanceMarket(INFT(address(nft)));
         nft.mint(user, tokenId);
         vm.stopPrank();
     }
 
-    function testFrontRunWithdrawal() public {
-        // 1. User approves the contract to withdraw
-        assertEq(nft.ownerOf(tokenId), user); // User is the owner of the NFT
+    function testFrontRunRefinance() public {
+        // 1. User approves the contract to refinance their NFT
+        assertEq(nft.ownerOf(tokenId), user);
         vm.startPrank(user);
-        nft.approve(address(vulnerableWithdrawal), tokenId);
-        assertEq(nft.getApproved(tokenId), address(vulnerableWithdrawal));
+        nft.approve(address(nftRefinanceMarket), tokenId);
+        assertEq(nft.getApproved(tokenId), address(nftRefinanceMarket));
         vm.stopPrank();
 
-        // 2. Attacker monitors the mempool, and before the user calls withdraw, the attacker calls withdraw
+        // 2. Attacker monitors the mempool, and before the user calls refinance, the attacker calls refinance
         vm.startPrank(attacker);
 
-        // Simulate the attacker front-running the transaction.  In a real front-running scenario, the attacker
-        // would increase the gas price to get miners to include their transaction first.
-        // Create the VulnerableWithdrawal contract as the Attacker
-        vulnerableWithdrawal.withdraw(tokenId);
+        // Simulate the attacker front-running the transaction
+        // In a real scenario, the attacker would increase the gas price to get their transaction included first
+        nftRefinanceMarket.refinance(tokenId);
 
-        // Verify that the NFT now belongs to the attacker after the front-running attack.
-        assertEq(nft.ownerOf(tokenId), address(attacker));
+        // Verify that the attacker is now marked as the creditor for this NFT
+        assertEq(nftRefinanceMarket.tokenCreditors(tokenId), attacker);
+
+        // Verify that the NFT now belongs to the contract
+        assertEq(nft.ownerOf(tokenId), address(nftRefinanceMarket));
         vm.stopPrank();
 
-        // 3. User tries to withdraw the NFT, but it has already been stolen by the attacker
+        // 3. User tries to refinance the NFT, but it has already been refinanced by the attacker
         vm.startPrank(user);
         vm.expectRevert("Not approved");
-        vulnerableWithdrawal.withdraw(tokenId);
+        nftRefinanceMarket.refinance(tokenId);
         vm.stopPrank();
     }
 }

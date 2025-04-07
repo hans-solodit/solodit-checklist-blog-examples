@@ -33,14 +33,6 @@ contract ExploitableContract {
         return pools[_poolCreator];
     }
 
-    function viewPoolCreator(address _poolCreator) public view returns (address) {
-        if(address(pools[_poolCreator]) != address(0)) {
-          return pools[_poolCreator].poolCreator();
-        } else {
-          return address(0);
-        }
-    }
-
     function viewPoolInitialPrice(address _poolCreator) public view returns (uint256) {
        if(address(pools[_poolCreator]) != address(0)) {
         return pools[_poolCreator].initialPrice();
