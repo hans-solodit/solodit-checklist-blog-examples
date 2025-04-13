@@ -29,8 +29,8 @@ contract GriefingAttackTest is Test {
         vm.prank(alice);
         vault.deposit{value: 1 ether}(alice);
 
-        // Time almost passes
-        vm.warp(block.timestamp + 3 minutes);
+        // Fast forward time to simulate the delay passing
+        vm.warp(block.timestamp + 60 minutes + 1 seconds);
 
         // Attacker resets Alice's timer
         vm.prank(attacker);
@@ -44,7 +44,7 @@ contract GriefingAttackTest is Test {
 }
 
 contract VulnerableVault {
-    uint256 public delay = 3 minutes;
+    uint256 public delay = 60 minutes;
     mapping(address => uint256) public lastDeposit;
     mapping(address => uint256) public balances;
 
@@ -54,9 +54,11 @@ contract VulnerableVault {
     }
 
     function withdraw(uint256 _amount) public {
-        require(block.timestamp >= lastDeposit[msg.sender] + delay, "Wait period not over");
+        require(block.timestamp >= lastDeposit[msg.sender] + delay,
+            "Wait period not over");
         require(balances[msg.sender] >= _amount, "Insufficient funds");
         balances[msg.sender] -= _amount;
         (bool success,) = payable(msg.sender).call{value: _amount}("");
-        require(success, "Transfer failed");    }
+        require(success, "Transfer failed");
+    }
 }
