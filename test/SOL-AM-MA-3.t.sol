@@ -9,9 +9,9 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
  * Checklist Item: Transaction Ordering Dependency
  *
  * This test demonstrates how smart contract logic can be exploited when it's sensitive to
- * transaction ordering. It shows a front-running attack on a simple DEX where a malicious
- * actor observes a pending transaction and executes their own transaction first, causing
- * the victim to receive less tokens than expected.
+ * transaction ordering. It shows a sandwich attack on a simple DEX where
+ * a minor observes a pending transaction, executes their own transaction first (front-running),
+ * and then executes another trade after the victim's transaction (back-running) to profit.
  *
  * The test also shows the remediation by implementing slippage protection where users can
  * specify minimum output they're willing to accept.
@@ -150,7 +150,10 @@ contract TransactionOrderingTest is Test {
         tokenA.transfer(attacker, 200 ether);
     }
 
-    function testFrontRunningAttack() public {
+    function testSandwichAttack() public {
+        // Record initial balances
+        uint attackerInitialBalanceA = tokenA.balanceOf(attacker);
+
         // Victim approves DEX to spend tokens
         vm.prank(victim);
         tokenA.approve(address(dex), 10 ether);
@@ -158,31 +161,55 @@ contract TransactionOrderingTest is Test {
         // Attacker approves DEX to spend tokens
         vm.prank(attacker);
         tokenA.approve(address(dex), 100 ether);
-
-        // Capture pre-attack state
-        uint victimInitialBalanceB = tokenB.balanceOf(victim);
-
-        // SCENARIO: Victim submits transaction to swap 10 tokenA for tokenB
-        // Expected output without front-running
-        uint expectedOutput = (dex.reserveB() * 10 ether) / (dex.reserveA() + 10 ether);
-
-        // However, attacker sees this transaction in the mempool and front-runs it
         vm.prank(attacker);
-        dex.swap(address(tokenA), 100 ether);
+        tokenB.approve(address(dex), type(uint256).max); // Allow selling tokens
 
-        // Now victim's transaction executes (after attacker's)
+        // STEP 1: Attacker front-runs by buying tokenB with a large amount of tokenA
+        console.log("--- STEP 1: Attacker front-runs victim's trade ---");
+        vm.prank(attacker);
+        uint frontrunBought = dex.swap(address(tokenA), 100 ether);
+        console.log("Attacker spent:", 100 ether, "tokenA");
+        console.log("Attacker received:", frontrunBought, "tokenB");
+
+        // Record pool state after front-run
+        uint reserveAAfterFrontrun = dex.reserveA();
+        uint reserveBAfterFrontrun = dex.reserveB();
+        console.log("Pool state after front-run - Reserve A:", reserveAAfterFrontrun, "Reserve B:", reserveBAfterFrontrun);
+
+        // STEP 2: Victim's transaction executes at a worse price
+        console.log("\n--- STEP 2: Victim's trade executes at worse price ---");
+        uint expectedOutputWithoutFrontrun = (initialLiquidityB * 10 ether) / (initialLiquidityA + 10 ether);
+
         vm.prank(victim);
-        uint actualOutput = dex.swap(address(tokenA), 10 ether);
+        uint victimReceived = dex.swap(address(tokenA), 10 ether);
+        console.log("Victim spent:", 10 ether, "tokenA");
+        console.log("Victim expected to receive (without front-running):", expectedOutputWithoutFrontrun, "tokenB");
+        console.log("Victim actually received:", victimReceived, "tokenB");
+        console.log("Victim lost:", expectedOutputWithoutFrontrun - victimReceived, "tokenB due to front-running");
 
-        // Check how much the victim received
-        uint victimFinalBalanceB = tokenB.balanceOf(victim);
-        uint victimReceivedAmount = victimFinalBalanceB - victimInitialBalanceB;
+        // Record pool state after victim's trade
+        uint reserveAAfterVictim = dex.reserveA();
+        uint reserveBAfterVictim = dex.reserveB();
+        console.log("Pool state after victim - Reserve A:", reserveAAfterVictim, "Reserve B:", reserveBAfterVictim);
 
-        // Due to front-running, victim receives less than expected
-        assertLt(actualOutput, expectedOutput,
-            "Victim should receive less than expected due to front-running");
-        assertEq(victimReceivedAmount, actualOutput,
-            "Victim received amount should match swap return value");
+        // STEP 3: Attacker back-runs by selling the tokenB they bought
+        console.log("\n--- STEP 3: Attacker back-runs by selling tokenB ---");
+        vm.prank(attacker);
+        uint backrunReceived = dex.swap(address(tokenB), frontrunBought);
+        console.log("Attacker sold:", frontrunBought, "tokenB");
+        console.log("Attacker received:", backrunReceived, "tokenA");
+
+        // Calculate attacker's profit in tokenA
+        uint attackerFinalBalanceA = tokenA.balanceOf(attacker);
+        int attackerProfit = int(attackerFinalBalanceA) - int(attackerInitialBalanceA);
+
+        console.log("\n--- SANDWICH ATTACK SUMMARY ---");
+        console.log("Attacker initial tokenA balance:", attackerInitialBalanceA);
+        console.log("Attacker final tokenA balance:", attackerFinalBalanceA);
+        console.log("Attacker's profit:", uint(attackerProfit), "tokenA");
+
+        // Verify the profit is positive
+        assertGt(attackerFinalBalanceA, attackerInitialBalanceA, "Attacker should profit from the sandwich attack");
     }
 
     function testPreventFrontRunningWithMinimumOutput() public {
