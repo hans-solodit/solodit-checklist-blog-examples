@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /**
  * Overview:
- * Checklist Item: Transaction Ordering Dependency
+ * Checklist Item ID: SOL-AM-MA-2
  *
  * This test demonstrates how smart contract logic can be exploited when it's sensitive to
  * transaction ordering. It shows a sandwich attack on a simple DEX where
