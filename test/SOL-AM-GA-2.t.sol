@@ -50,17 +50,17 @@ contract Relayer {
 contract RelayerTest is Test {
     Target target;
     Relayer relayer;
-    address actor;
+    address attacker;
     bytes testData;
 
     function setUp() public {
         target = new Target();
         relayer = new Relayer(address(target));
-        actor = makeAddr("actor");
+        attacker = makeAddr("attacker");
         testData = abi.encode("user_transaction");
 
-        // Fund the malicious actor
-        vm.deal(actor, 1 ether);
+        // Fund the attacker
+        vm.deal(attacker, 1 ether);
     }
 
     function testInsufficientGasGriefing() public {
@@ -75,13 +75,13 @@ contract RelayerTest is Test {
         // First, verify that the data hasn't been executed yet
         assertEq(relayer.executed(testData), false);
 
-        // Malicious actor calls the forward function with precisely crafted gas amount
-        // The actor deliberately calculates just enough gas for the relayer to mark
+        // Attacker calls the forward function with precisely crafted gas amount
+        // The attacker deliberately calculates just enough gas for the relayer to mark
         // the transaction as executed but not enough for the external call to succeed
-        vm.prank(actor);
+        vm.prank(attacker);
 
         // We use a specific low gas limit to demonstrate the attack
-        // The actor carefully crafts this value to trigger the unexpected case
+        // The attacker carefully crafts this value to trigger the unexpected case
         uint256 limitedGas = gasNeeded - 10000;
 
         // Call the forward function with limited gas
