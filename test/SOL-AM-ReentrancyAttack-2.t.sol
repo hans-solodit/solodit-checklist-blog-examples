@@ -44,6 +44,9 @@ contract Vault is ReentrancyGuard {
 
     // Returns ETH value per share - can be manipulated during reentrancy
     function getSharePrice() public view returns (uint256) {
+        if (_status == ENTERED) {
+            revert ReentrancyGuardReentrantCall();
+        }
         if (totalShares == 0) return 1e18;
         return (totalBalance * 1e18) / totalShares; // Use internal balance tracker
     }
