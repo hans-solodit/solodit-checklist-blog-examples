@@ -1,0 +1,9 @@
+---
+description:
+globs:
+alwaysApply: true
+---
+- Ensure to minimize the PoC
+- Freely import OpenZeppelin's contracts and use
+
+- Ask if you are not 99% sure on implementation
