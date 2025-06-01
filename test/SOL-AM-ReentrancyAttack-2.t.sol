@@ -2,6 +2,7 @@
 pragma solidity ^0.8.19;
 
 import "forge-std/Test.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * Overview:
@@ -14,20 +15,20 @@ import "forge-std/Test.sol";
  */
 
 // Vault that issues shares for ETH deposits
-contract Vault {
+contract Vault is ReentrancyGuard {
     mapping(address => uint256) public shares;
     mapping(address => mapping(address => uint256)) public allowances;
     uint256 public totalShares;
     uint256 public totalBalance; // Track ETH balance internally
 
-    function deposit() external payable {
+    function deposit() external payable nonReentrant {
         uint256 sharesToMint = msg.value; // 1:1 for simplicity
         shares[msg.sender] += sharesToMint;
         totalShares += sharesToMint;
         totalBalance += msg.value; // Update internal balance tracker
     }
 
-    function withdraw(uint256 shareAmount) external {
+    function withdraw(uint256 shareAmount) external nonReentrant {
         require(shares[msg.sender] >= shareAmount, "Insufficient shares");
 
         uint256 ethAmount = (shareAmount * totalBalance) / totalShares;
