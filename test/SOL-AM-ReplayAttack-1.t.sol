@@ -42,8 +42,6 @@ contract RewardSystem is Ownable {
         if (success) {
             nonces[user]++;
         } else {
-            // Revert the reward deduction if transfer failed
-            rewards[user] += amount;
             revert("Transfer failed");
         }
     }
